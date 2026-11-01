@@ -7,6 +7,7 @@ import android.media.*
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
+import android.provider.Settings
 import android.view.*
 import android.widget.TextView
 import kotlinx.coroutines.*
