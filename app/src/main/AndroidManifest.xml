@@ -1,17 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Android requires RECORD_AUDIO for playback capture; AudioRecord is configured for app playback only. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- User must explicitly grant this special access before the floating caption window is added. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <queries>
-        <intent><action android:name="android.speech.RecognitionService" /></intent>
-    </queries>
-    <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="AI Tamil Live Subtitles" android:usesCleartextTraffic="false">
-        <activity android:name=".MainActivity" android:exported="true">
+    <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="NOVA LIVE CAPTIONS" android:usesCleartextTraffic="false">
+        <activity android:name=".ui.MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
-        <service android:name=".SubtitleService" android:exported="false" android:foregroundServiceType="mediaProjection" />
+        <service android:name=".service.CaptionService" android:exported="false" android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>

@@ -5,7 +5,7 @@
 #include <whisper.h>
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_aitamil_livesubtitles_WhisperEngine_00024Companion_createNative(JNIEnv *env, jobject, jstring model_path) {
+Java_com_nova_livecaptions_speech_WhisperNative_createNative(JNIEnv *env, jobject, jstring model_path) {
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     auto params = whisper_context_default_params();
     params.use_gpu = false;
@@ -15,7 +15,7 @@ Java_com_aitamil_livesubtitles_WhisperEngine_00024Companion_createNative(JNIEnv 
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_aitamil_livesubtitles_WhisperEngine_transcribeNative(JNIEnv *env, jobject, jlong handle,
+Java_com_nova_livecaptions_speech_WhisperEngine_transcribeNative(JNIEnv *env, jobject, jlong handle,
                                                                jfloatArray samples, jstring lang) {
     auto *ctx = reinterpret_cast<whisper_context *>(handle);
     if (ctx == nullptr) return env->NewStringUTF("");
@@ -40,7 +40,7 @@ Java_com_aitamil_livesubtitles_WhisperEngine_transcribeNative(JNIEnv *env, jobje
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aitamil_livesubtitles_WhisperEngine_releaseNative(JNIEnv *, jobject, jlong handle) {
+Java_com_nova_livecaptions_speech_WhisperEngine_releaseNative(JNIEnv *, jobject, jlong handle) {
     auto *ctx = reinterpret_cast<whisper_context *>(handle);
     if (ctx != nullptr) whisper_free(ctx);
 }

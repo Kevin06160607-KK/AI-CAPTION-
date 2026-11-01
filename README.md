@@ -1,27 +1,30 @@
-# AI Tamil Live Subtitles
+# NOVA LIVE CAPTIONS
 
-Android captions for app playback using Android AudioPlaybackCapture and a local Whisper speech model. App playback is captured directly and is not played through the microphone, so the app does not duck or interrupt the video's audio. The foreground service shows a persistent Stop action.
+Native Android live captions for supported app playback. NOVA captures an allowed playback stream, transcribes it locally with Whisper, translates captions on device, and presents them in a floating overlay.
 
-## Features
+## Included
 
-- Playback audio capture after the Android MediaProjection consent prompt. Requires Android 10 (API 29) or newer, `RECORD_AUDIO` permission (required by Android for playback capture), and an app that permits capture. The recorder is configured only with `AudioPlaybackCaptureConfiguration`; it never opens a microphone input.
-- On-device multilingual Whisper transcription. The approximately 32 MB tiny quantized model downloads from the official `ggerganov/whisper.cpp` model repository the first time; transcription then runs locally.
-- Tamil, Thanglish and English subtitles. Tamil-to-Thanglish uses Android ICU `Tamil-Latin` transliteration. Translation between Tamil, English and Hindi uses ML Kit on-device models downloaded as needed.
-- Draggable floating overlay, configurable size, text color and opacity, and on-device history (last 300 entries).
-- No API keys, audio uploads or cloud speech-recognition service.
+- Kotlin + Jetpack Compose + Material 3 dashboard, settings and caption history.
+- Android 10+ `MediaProjection` consent and `AudioPlaybackCapture` in a foreground service. Android requires `RECORD_AUDIO` permission for this API, but NOVA configures `AudioRecord` for playback capture and does not read microphone input.
+- Modular playback capture, speech-engine interface, Whisper implementation, on-device translation, Tamil transliteration, overlay, settings and history packages.
+- Auto language detection, Tamil/English source selection and Tamil, Thanglish or English output. Bilingual captions are optional.
+- Start, Pause, Resume and Stop controls. Pause stops the capture recorder while retaining the temporary session; Stop ends projection and closes the speech model.
+- Caption persistence is off by default. When enabled, recognized text is stored locally; audio is never saved.
+- Small, Standard or Large captions, 5–100% background transparency, draggable overlay and local history.
 
-Some apps deliberately block playback capture; Android cannot override their capture policy. Audio captions update in short rolling windows, so captions can appear a few seconds after the spoken audio. Translation models need an internet connection on their first use. The app supports arm64 phones and x86_64 emulators.
+Android enforces the source app's playback-capture policy. Some apps, protected content and certain audio usages cannot be captured. NOVA does not bypass those restrictions. Captions are generated in rolling four-second windows; exact latency depends on device CPU, translation model availability and source playback. First run downloads the ~32 MB Whisper tiny quantized model. Translation models download when first needed. Audio transcription and translation run on device; no API keys or audio upload service are used.
 
-## Run on a device
+## Open and run
 
-1. Open the project in Android Studio with JDK 17, Android SDK Platform 35, NDK 27.2.12479018 and CMake 3.22.1.
-2. Install and open the app. Connect to Wi-Fi for the first run so it can download the local Whisper model; translation models download when first needed.
-3. Tap **Start device audio captions**. Allow the Android audio permission, overlay permission, and the system playback-capture prompt. The Android audio permission is a platform prerequisite; this app captures the playback stream and does not use microphone input.
-4. Start or resume the video in the other app. Choose Tamil, Thanglish or English. Use the persistent notification to stop capture.
+1. Open this project in Android Studio with JDK 17, Android SDK Platform 35, NDK 27.2.12479018 and CMake 3.22.1.
+2. Install the app on Android 10 (API 29) or newer. Connect to the internet for first-run model downloads.
+3. Tap **Start captions**. Grant the Android audio-capture permission, **Display over other apps**, and the system MediaProjection prompt.
+4. Start playback in a supported app. Use Pause/Resume while keeping the session, or Stop to end capture.
+5. Choose Auto Detect, Tamil or English source; Tamil, Thanglish or English output; optional bilingual display; and other caption settings.
 
-The Android system can stop MediaProjection at any time from Quick Settings. Start a new session to resume. Protected apps may provide silence by design.
+When Android stops projection from Quick Settings, start a fresh capture session. If the source app opts out, NOVA reports no supported stream and leaves that app's playback untouched.
 
-## Build a debug APK
+## Build
 
 With JDK 17 and Gradle 8.9:
 
@@ -29,8 +32,8 @@ With JDK 17 and Gradle 8.9:
 gradle --no-daemon :app:assembleDebug
 ```
 
-The APK is `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds it on push, pull request or manual dispatch and uploads the APK artifact.
+APK output: `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds the debug APK on pushes, pull requests and manual dispatch, then uploads `nova-live-captions-debug-apk`.
 
-## Privacy
+## Package structure
 
-Audio stays on device for transcription. The app asks Android to grant a temporary MediaProjection token, reads only playback usages allowed by Android, and stops when the user or system ends the session. The only network downloads are the Whisper model and on-device translation models. No recognized audio or text is uploaded.
+`ui`, `audio`, `speech`, `translation`, `transliteration`, `overlay`, `service`, `settings` and `data` separate the Android screens, capture/session flow and local content handling.

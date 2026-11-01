@@ -1,9 +1,6 @@
-package com.aitamil.livesubtitles
+package com.nova.livecaptions.data
 
 import android.content.Context
-import android.icu.text.Transliterator
-import com.google.mlkit.nl.translate.*
-import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 
 enum class SubtitleMode(val title: String) {
@@ -35,18 +32,4 @@ object SubtitleRepository {
         context.getSharedPreferences(prefsName, Context.MODE_PRIVATE).edit().remove("items").apply()
     }
 
-    suspend fun translate(text: String, sourceTag: String, targetTag: String): String {
-        if (sourceTag == targetTag) return text
-        val source = TranslateLanguage.fromLanguageTag(sourceTag) ?: return text
-        val target = TranslateLanguage.fromLanguageTag(targetTag) ?: return text
-        val client = Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(source).setTargetLanguage(target).build())
-        return try {
-            client.downloadModelIfNeeded().await()
-            client.translate(text).await()
-        } finally { client.close() }
-    }
-
-    fun thanglish(tamil: String): String = try {
-        Transliterator.getInstance("Tamil-Latin").transliterate(tamil).replace(Regex("\\s+"), " ").trim()
-    } catch (_: Exception) { tamil }
 }

@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.aitamil.livesubtitles"
+    namespace = "com.nova.livecaptions"
     compileSdk = 35
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "com.aitamil.livesubtitles"
-        minSdk = 26
+        applicationId = "com.nova.livecaptions"
+        minSdk = 29
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"

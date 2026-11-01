@@ -1,4 +1,4 @@
-package com.aitamil.livesubtitles
+package com.nova.livecaptions.speech
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -7,22 +7,19 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
-class WhisperEngine private constructor(private val handle: Long) : AutoCloseable {
+class WhisperEngine private constructor(private val handle: Long) : SpeechEngine {
     private external fun transcribeNative(handle: Long, samples: FloatArray, language: String): String
     private external fun releaseNative(handle: Long)
-    fun transcribe(samples: FloatArray, language: String): String = synchronized(this) { transcribeNative(handle, samples, language) }
+    override fun transcribe(samples: FloatArray, language: String): String = synchronized(this) { transcribeNative(handle, samples, language) }
     override fun close() = synchronized(this) { if (handle != 0L) releaseNative(handle) }
 
     companion object {
         private const val MODEL_FILE = "ggml-tiny-q5_1.bin"
         private const val MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin?download=true"
-        init { System.loadLibrary("ai_tamil_whisper") }
-        @JvmStatic private external fun createNative(modelPath: String): Long
-
         suspend fun create(directory: File, progress: (Long, Long) -> Unit): WhisperEngine = withContext(Dispatchers.IO) {
             val model = File(directory, MODEL_FILE)
             if (!model.exists() || model.length() < 25_000_000L) download(model, progress)
-            val pointer = createNative(model.absolutePath)
+            val pointer = WhisperNative.createNative(model.absolutePath)
             check(pointer != 0L) { "Whisper could not open its speech model." }
             WhisperEngine(pointer)
         }
@@ -34,7 +31,7 @@ class WhisperEngine private constructor(private val handle: Long) : AutoCloseabl
                 connectTimeout = 20_000
                 readTimeout = 60_000
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "AI-Tamil-Live-Subtitles/1.0")
+                setRequestProperty("User-Agent", "NOVA-Live-Captions/1.0")
             }
             try {
                 connection.connect()
@@ -60,4 +57,9 @@ class WhisperEngine private constructor(private val handle: Long) : AutoCloseabl
             }
         }
     }
+}
+
+private object WhisperNative {
+    init { System.loadLibrary("nova_whisper") }
+    external fun createNative(modelPath: String): Long
 }

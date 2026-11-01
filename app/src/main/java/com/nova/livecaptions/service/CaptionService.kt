@@ -1,29 +1,36 @@
-package com.aitamil.livesubtitles
+package com.nova.livecaptions.service
 
 import android.app.*
 import android.content.*
-import android.graphics.PixelFormat
 import android.media.*
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.provider.Settings
-import android.view.*
-import android.widget.TextView
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import java.util.Locale
+import kotlin.math.abs
+import com.nova.livecaptions.data.SubtitleLine
+import com.nova.livecaptions.data.SubtitleRepository
+import com.nova.livecaptions.speech.WhisperEngine
+import com.nova.livecaptions.speech.SpeechEngine
+import com.nova.livecaptions.translation.OnDeviceTranslator
+import com.nova.livecaptions.transliteration.TamilTransliterator
+import com.nova.livecaptions.audio.PlaybackAudioCapture
+import com.nova.livecaptions.overlay.CaptionOverlay
+import com.nova.livecaptions.settings.CaptionSettingsStore
 
-class SubtitleService : Service() {
-    private var window: WindowManager? = null
-    private var overlay: TextView? = null
-    private var params: WindowManager.LayoutParams? = null
+class CaptionService : Service() {
+    private var captionOverlay: CaptionOverlay? = null
     private var projection: MediaProjection? = null
     private var recorder: AudioRecord? = null
-    private var whisper: WhisperEngine? = null
+    private var speechEngine: SpeechEngine? = null
     private var captureJob: Job? = null
     private var recognitionJob: Job? = null
     private var stopped = false
+    private var paused = false
+    private var modelJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val main = Handler(Looper.getMainLooper())
 
@@ -31,15 +38,21 @@ class SubtitleService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val channel = NotificationChannel(CHANNEL_ID, "Live subtitles", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(CHANNEL_ID, "NOVA Live Captions", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) { stopSession("Stopped"); return START_NOT_STICKY }
-        if (intent?.action != ACTION_START) return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> { stopSession("Stopped"); return START_NOT_STICKY }
+            ACTION_PAUSE -> { pauseCapture(); return START_NOT_STICKY }
+            ACTION_RESUME -> { resumeCapture(); return START_NOT_STICKY }
+            ACTION_REFRESH_SETTINGS -> { captionOverlay?.updateSettings(); return START_STICKY }
+            ACTION_START -> Unit
+            else -> return START_NOT_STICKY
+        }
         startForegroundCompat()
-        if (overlay == null && Settings.canDrawOverlays(this)) showOverlay()
+        if (captionOverlay == null && Settings.canDrawOverlays(this)) runCatching { captionOverlay = CaptionOverlay(this).also { it.show() } }
         val data = projectionData(intent)
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         if (data == null || code != Activity.RESULT_OK) { stopSession("Screen audio permission was not granted"); return START_NOT_STICKY }
@@ -55,11 +68,13 @@ class SubtitleService : Service() {
     }
 
     private fun startForegroundCompat() {
-        val stopIntent = PendingIntent.getService(this, 1, Intent(this, SubtitleService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val stopIntent = PendingIntent.getService(this, 1, Intent(this, CaptionService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val pauseIntent = PendingIntent.getService(this, 2, Intent(this, CaptionService::class.java).setAction(if (paused) ACTION_RESUME else ACTION_PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("AI Tamil Live Subtitles")
+            .setContentTitle("NOVA LIVE CAPTIONS")
             .setContentText("Preparing private, on-device subtitles")
+            .addAction(Notification.Action.Builder(null, if (paused) "Resume" else "Pause", pauseIntent).build())
             .addAction(Notification.Action.Builder(null, "Stop", stopIntent).build())
             .build()
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
@@ -67,12 +82,12 @@ class SubtitleService : Service() {
     }
 
     private fun beginSession() {
-        if (whisper != null || captureJob != null) return
-        scope.launch {
+        if (speechEngine != null || captureJob != null || modelJob?.isActive == true) return
+        modelJob = scope.launch {
             publishStatus("Downloading the speech model (about 32 MB)...")
             try {
                 var lastPercent = -1
-                whisper = WhisperEngine.create(filesDir) { current, total ->
+                speechEngine = WhisperEngine.create(filesDir) { current, total ->
                     val percent = if (total > 0) (current * 100 / total).toInt() else -1
                     if (percent != lastPercent) {
                         lastPercent = percent
@@ -80,7 +95,7 @@ class SubtitleService : Service() {
                         main.post { publishStatus("Preparing offline speech model: $progress") }
                     }
                 }
-                if (stopped) return@launch
+                if (stopped || paused) return@launch
                 startPlaybackCapture()
             } catch (e: Exception) {
                 stopSession("Could not prepare speech recognition: ${e.message ?: "download or model error"}")
@@ -90,34 +105,18 @@ class SubtitleService : Service() {
 
     private fun startPlaybackCapture() {
         val mediaProjection = projection ?: error("Device audio permission expired. Start again and approve capture.")
-        val sampleRate = CAPTURE_RATE
-        val format = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-            .build()
-        val config = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
-            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-            .addMatchingUsage(AudioAttributes.USAGE_GAME)
-            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-            .build()
-        val minimum = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        check(minimum > 0) { "This device does not support 16 kHz playback capture." }
-        val record = AudioRecord.Builder()
-            .setAudioFormat(format)
-            .setBufferSizeInBytes(maxOf(minimum, sampleRate * 2))
-            .setAudioPlaybackCaptureConfig(config)
-            .build()
-        check(record.state == AudioRecord.STATE_INITIALIZED) { "Android could not open the permitted playback stream." }
+        val sampleRate = PlaybackAudioCapture.CAPTURE_RATE
+        val record = PlaybackAudioCapture(mediaProjection).createRecorder()
         recorder = record
         record.startRecording()
         publishStatus("Capturing permitted app audio. Phone playback stays unchanged.")
         val chunks = Channel<FloatArray>(capacity = Channel.CONFLATED)
         captureJob = scope.launch(Dispatchers.IO) {
             val shorts = ShortArray(sampleRate / 4)
-            val pending = ArrayList<Float>(MODEL_RATE * WINDOW_SECONDS)
+            val pending = ArrayList<Float>(PlaybackAudioCapture.SPEECH_RATE * WINDOW_SECONDS)
             var resampleSum = 0f
             var resampleCount = 0
+            var quietWindows = 0
             while (isActive && !stopped) {
                 val count = record.read(shorts, 0, shorts.size, AudioRecord.READ_BLOCKING)
                 if (count < 0) { main.post { stopSession("Playback capture stopped by Android (code $count).") }; break }
@@ -125,15 +124,18 @@ class SubtitleService : Service() {
                 for (i in 0 until count) {
                     resampleSum += shorts[i] / 32768.0f
                     resampleCount++
-                    if (resampleCount == CAPTURE_RATE / MODEL_RATE) {
+                    if (resampleCount == PlaybackAudioCapture.CAPTURE_RATE / PlaybackAudioCapture.SPEECH_RATE) {
                         pending.add(resampleSum / resampleCount)
                         resampleSum = 0f
                         resampleCount = 0
                     }
                 }
-                if (pending.size >= MODEL_RATE * WINDOW_SECONDS) {
+                if (pending.size >= PlaybackAudioCapture.SPEECH_RATE * WINDOW_SECONDS) {
+                    val peak = pending.maxOfOrNull { abs(it) } ?: 0f
+                    if (peak < .002f) quietWindows++ else quietWindows = 0
+                    if (quietWindows == 3) main.post { publishStatus("No app audio detected. The source app may block playback capture.") }
                     chunks.trySend(pending.toFloatArray())
-                    val retained = pending.takeLast(MODEL_RATE * OVERLAP_SECONDS)
+                    val retained = pending.takeLast(PlaybackAudioCapture.SPEECH_RATE * OVERLAP_SECONDS)
                     pending.clear()
                     pending.addAll(retained)
                 }
@@ -143,14 +145,14 @@ class SubtitleService : Service() {
         recognitionJob = scope.launch(Dispatchers.IO) {
             for (samples in chunks) {
                 val lang = recognitionLanguage()
-                val result = runCatching { whisper?.transcribe(samples, lang).orEmpty() }.getOrElse { "" }
+                val result = runCatching { speechEngine?.transcribe(samples, lang).orEmpty() }.getOrElse { "" }
                 val stable = removeOverlap(result)
                 if (stable.isNotBlank()) {
                     val sourceTag = detectLanguage(stable)
-                    val tamil = if (sourceTag == "ta") stable else runCatching { SubtitleRepository.translate(stable, sourceTag, "ta") }.getOrDefault(stable)
-                    val english = if (sourceTag == "en") stable else runCatching { SubtitleRepository.translate(stable, sourceTag, "en") }.getOrDefault(stable)
+                    val tamil = if (sourceTag == "ta") stable else runCatching { OnDeviceTranslator.translate(stable, sourceTag, "ta") }.getOrDefault(stable)
+                    val english = if (sourceTag == "en") stable else runCatching { OnDeviceTranslator.translate(stable, sourceTag, "en") }.getOrDefault(stable)
                     val line = SubtitleLine(stable, tamil, english)
-                    SubtitleRepository.save(this@SubtitleService, line)
+                    if (CaptionSettingsStore.read(this@CaptionService).saveCaptions) SubtitleRepository.save(this@CaptionService, line)
                     val selected = render(tamil, english)
                     withContext(Dispatchers.Main) { publishText(selected) }
                 }
@@ -178,7 +180,7 @@ class SubtitleService : Service() {
     }
 
     private fun normalizeToken(value: String) = value.trim { !it.isLetterOrDigit() }.lowercase(Locale.ROOT)
-    private fun recognitionLanguage(): String = when (getSharedPreferences(PREFS, MODE_PRIVATE).getString("source", "auto")) {
+    private fun recognitionLanguage(): String = when (CaptionSettingsStore.read(this).sourceLanguage) {
         "ta-IN" -> "ta"; "hi-IN" -> "hi"; "en-US" -> "en"; else -> "auto"
     }
     private fun detectLanguage(text: String): String = when {
@@ -186,10 +188,16 @@ class SubtitleService : Service() {
         text.any { it in '\u0900'..'\u097F' } -> "hi"
         else -> "en"
     }
-    private fun render(tamil: String, english: String): String = when (getSharedPreferences(PREFS, MODE_PRIVATE).getString("mode", "TAMIL")) {
-        "THANGLISH" -> SubtitleRepository.thanglish(tamil)
-        "ENGLISH" -> english
-        else -> tamil
+    private fun render(tamil: String, english: String): String {
+        val settings = CaptionSettingsStore.read(this)
+        val main = when (settings.outputMode) {
+            com.nova.livecaptions.data.SubtitleMode.THANGLISH -> TamilTransliterator.toThanglish(tamil)
+            com.nova.livecaptions.data.SubtitleMode.ENGLISH -> english
+            else -> tamil
+        }
+        if (!settings.bilingual) return main
+        val other = if (settings.outputMode == com.nova.livecaptions.data.SubtitleMode.ENGLISH) tamil else english
+        return "$main\n$other"
     }
 
     @Suppress("DEPRECATION")
@@ -198,39 +206,42 @@ class SubtitleService : Service() {
     else intent.getParcelableExtra(EXTRA_PROJECTION_DATA)
 
     private fun publishStatus(text: String) {
-        overlay?.post { overlay?.text = text }
+        captionOverlay?.showText(text)
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("AI Tamil Live Subtitles")
-            .setContentText(text.take(100)).addAction(Notification.Action.Builder(null, "Stop", PendingIntent.getService(this, 1, Intent(this, SubtitleService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()).build())
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("NOVA LIVE CAPTIONS")
+            .setContentText(text.take(100)).build())
         sendBroadcast(Intent(ACTION_STATUS).putExtra(EXTRA_TEXT, text).setPackage(packageName))
     }
     private fun publishText(text: String) {
-        overlay?.post { overlay?.text = text }
+        captionOverlay?.updateSettings()
+        captionOverlay?.showText(text)
         sendBroadcast(Intent(ACTION_UPDATE).putExtra(EXTRA_TEXT, text).setPackage(packageName))
     }
 
-    private fun showOverlay() {
-        window = getSystemService(WINDOW_SERVICE) as WindowManager
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val text = TextView(this).apply {
-            setTextColor(prefs.getInt("color", 0xFFFFFFFF.toInt()))
-            textSize = prefs.getFloat("font", 20f)
-            setPadding(22, 14, 22, 14)
-            setBackgroundColor(((prefs.getFloat("opacity", .8f) * 255).toInt() shl 24) or 0x00111827)
-            this.text = "Preparing speech model..."
-        }
-        params = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = prefs.getInt("overlay_x", 24); y = prefs.getInt("overlay_y", 140) }
-        var downX = 0f; var downY = 0f; var startX = 0; var startY = 0
-        text.setOnTouchListener { _, event -> when (event.action) {
-            MotionEvent.ACTION_DOWN -> { downX = event.rawX; downY = event.rawY; startX = params!!.x; startY = params!!.y; true }
-            MotionEvent.ACTION_MOVE -> { params!!.x = startX + (event.rawX - downX).toInt(); params!!.y = startY + (event.rawY - downY).toInt(); prefs.edit().putInt("overlay_x", params!!.x).putInt("overlay_y", params!!.y).apply(); window?.updateViewLayout(text, params); true }
-            else -> false
-        } }
-        overlay = text
-        runCatching { window?.addView(text, params) }
+    private fun pauseCapture() {
+        if (stopped || paused) return
+        paused = true
+        captureJob?.cancel(); recognitionJob?.cancel(); captureJob = null; recognitionJob = null
+        runCatching { recorder?.stop() }; recorder?.release(); recorder = null
+        publishStatus("Paused. Video audio is not being captured.")
+        updateNotification()
+    }
+
+    private fun resumeCapture() {
+        if (stopped || !paused) return
+        paused = false
+        if (speechEngine == null) beginSession() else runCatching { startPlaybackCapture() }.onFailure { stopSession("Could not resume audio capture: ${it.message}") }
+        updateNotification()
+    }
+
+    private fun updateNotification() {
+        val pause = PendingIntent.getService(this, 2, Intent(this, CaptionService::class.java).setAction(if (paused) ACTION_RESUME else ACTION_PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val stop = PendingIntent.getService(this, 1, Intent(this, CaptionService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = Notification.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("NOVA LIVE CAPTIONS")
+            .setContentText(if (paused) "Paused" else "Capturing app playback")
+            .addAction(Notification.Action.Builder(null, if (paused) "Resume" else "Pause", pause).build())
+            .addAction(Notification.Action.Builder(null, "Stop", stop).build()).build()
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
 
     private fun stopSession(reason: String) {
@@ -239,9 +250,9 @@ class SubtitleService : Service() {
         captureJob?.cancel(); recognitionJob?.cancel()
         runCatching { recorder?.stop() }; recorder?.release(); recorder = null
         runCatching { projection?.stop() }; projection = null
-        whisper?.close(); whisper = null
+        speechEngine?.close(); speechEngine = null
         publishStatus(reason)
-        runCatching { overlay?.let { window?.removeView(it) } }; overlay = null
+        captionOverlay?.remove(); captionOverlay = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName))
@@ -252,26 +263,27 @@ class SubtitleService : Service() {
         scope.cancel()
         runCatching { recorder?.stop() }; recorder?.release(); recorder = null
         runCatching { projection?.stop() }; projection = null
-        whisper?.close(); whisper = null
-        runCatching { overlay?.let { window?.removeView(it) } }; overlay = null
+        speechEngine?.close(); speechEngine = null
+        captionOverlay?.remove(); captionOverlay = null
+        sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName))
         super.onDestroy()
     }
 
     companion object {
-        const val ACTION_START = "com.aitamil.livesubtitles.START_CAPTURE"
-        const val ACTION_STOP = "com.aitamil.livesubtitles.STOP_CAPTURE"
-        const val ACTION_UPDATE = "com.aitamil.livesubtitles.UPDATE"
-        const val ACTION_STATUS = "com.aitamil.livesubtitles.STATUS"
-        const val ACTION_STOPPED = "com.aitamil.livesubtitles.STOPPED"
+        const val ACTION_START = "com.nova.livecaptions.START_CAPTURE"
+        const val ACTION_STOP = "com.nova.livecaptions.STOP_CAPTURE"
+        const val ACTION_PAUSE = "com.nova.livecaptions.PAUSE_CAPTURE"
+        const val ACTION_RESUME = "com.nova.livecaptions.RESUME_CAPTURE"
+        const val ACTION_REFRESH_SETTINGS = "com.nova.livecaptions.REFRESH_SETTINGS"
+        const val ACTION_UPDATE = "com.nova.livecaptions.UPDATE"
+        const val ACTION_STATUS = "com.nova.livecaptions.STATUS"
+        const val ACTION_STOPPED = "com.nova.livecaptions.STOPPED"
         const val EXTRA_RESULT_CODE = "projection_result_code"
         const val EXTRA_PROJECTION_DATA = "projection_data"
         const val EXTRA_TEXT = "text"
-        private const val CHANNEL_ID = "live_subtitles"
+        private const val CHANNEL_ID = "nova_live_captions"
         private const val NOTIFICATION_ID = 7
-        private const val CAPTURE_RATE = 48_000
-        private const val MODEL_RATE = 16_000
         private const val WINDOW_SECONDS = 4
         private const val OVERLAP_SECONDS = 1
-        private const val PREFS = "settings"
     }
 }

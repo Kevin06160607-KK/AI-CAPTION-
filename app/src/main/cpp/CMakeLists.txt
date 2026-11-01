@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(ai_tamil_whisper LANGUAGES C CXX)
+project(nova_caption_whisper LANGUAGES C CXX)
 
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -16,6 +16,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(whisper)
 
-add_library(ai_tamil_whisper SHARED whisper-jni.cpp)
+add_library(nova_whisper SHARED whisper-jni.cpp)
 find_library(ANDROID_LOG_LIB log)
-target_link_libraries(ai_tamil_whisper PRIVATE whisper ${ANDROID_LOG_LIB})
+target_link_libraries(nova_whisper PRIVATE whisper ${ANDROID_LOG_LIB})
