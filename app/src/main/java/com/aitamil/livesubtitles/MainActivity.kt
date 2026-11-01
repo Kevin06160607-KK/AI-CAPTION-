@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
     @Composable private fun History() {
         Text("Subtitle history", fontSize = 26.sp, fontWeight = FontWeight.Bold)
         val lines = remember { mutableStateListOf<SubtitleLine>().also { it.addAll(SubtitleRepository.history(this)) } }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { TextButton(onClick = { SubtitleRepository.clear(this); lines.clear() }) { Text("Clear history") } }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { TextButton(onClick = { SubtitleRepository.clear(this@MainActivity); lines.clear() }) { Text("Clear history") } }
         if (lines.isEmpty()) Text("Recognized subtitles are saved on this device.", color = Color.LightGray)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) { items(lines) { line -> CardBox { Text(line.tamil, fontSize = 18.sp); Text(line.english, color = Color.LightGray, modifier = Modifier.padding(top = 4.dp)); Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(line.time)), color = Color.Gray, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp)) } } }
     }
@@ -97,15 +97,15 @@ class MainActivity : ComponentActivity() {
         CardBox {
             Text("Recognition language", fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(top = 6.dp)) {
-                listOf("en-US" to "English", "ta-IN" to "தமிழ்", "hi-IN" to "हिन्दी").forEach { (tag, title) ->
+                listOf("en-US" to "English", "ta-IN" to "\u0BA4\u0BAE\u0BBF\u0BB4\u0BCD", "hi-IN" to "Hindi").forEach { (tag, title) ->
                     FilterChip(selected = source == tag, onClick = { source = tag; prefs.edit().putString("source", tag).apply() }, label = { Text(title) })
                 }
             }
             Text("Applies to the next listening session.", color = Color.Gray, fontSize = 12.sp)
             Spacer(Modifier.height(12.dp))
-            Text("Subtitle font size · ${size.toInt()} sp"); Slider(value = size, onValueChange = { size = it; prefs.edit().putFloat("font", it).apply() }, valueRange = 14f..36f)
-            Spacer(Modifier.height(8.dp)); Text("Background opacity · ${(opacity * 100).toInt()}%"); Slider(value = opacity, onValueChange = { opacity = it; prefs.edit().putFloat("opacity", it).apply() }, valueRange = .2f..1f)
-            Spacer(Modifier.height(8.dp)); Text("Text colour"); Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) { listOf("White" to -1, "Yellow" to 0xFFFFFF00.toInt(), "Cyan" to 0xFF80DEEA.toInt()).forEach { (name, color) -> TextButton(onClick = { prefs.edit().putInt("color", color).apply() }) { Text("● $name", color = Color(color)) } } }
+            Text("Subtitle font size: ${size.toInt()} sp"); Slider(value = size, onValueChange = { size = it; prefs.edit().putFloat("font", it).apply() }, valueRange = 14f..36f)
+            Spacer(Modifier.height(8.dp)); Text("Background opacity: ${(opacity * 100).toInt()}%"); Slider(value = opacity, onValueChange = { opacity = it; prefs.edit().putFloat("opacity", it).apply() }, valueRange = .2f..1f)
+            Spacer(Modifier.height(8.dp)); Text("Text colour"); Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) { listOf("White" to -1, "Yellow" to 0xFFFFFF00.toInt(), "Cyan" to 0xFF80DEEA.toInt()).forEach { (name, color) -> TextButton(onClick = { prefs.edit().putInt("color", color).apply() }) { Text("[$name]", color = Color(color)) } } }
         }
         Spacer(Modifier.height(14.dp)); CardBox { Text("Privacy", fontWeight = FontWeight.SemiBold); Text("Speech recognition and ML Kit translation run on device when supported. No API key is required. The Android recognizer may use the device speech service depending on manufacturer settings.", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
     }

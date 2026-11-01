@@ -4,6 +4,7 @@ import android.app.*
 import android.content.*
 import android.graphics.PixelFormat
 import android.os.*
+import android.provider.Settings
 import android.view.*
 import android.widget.TextView
 import android.speech.*
@@ -30,7 +31,7 @@ class SubtitleService : Service() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) { publish("Speech recognition is unavailable on this device"); return }
         recognizer = if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) SpeechRecognizer.createOnDeviceSpeechRecognizer(this) else SpeechRecognizer.createSpeechRecognizer(this)
         recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) { publish("Listening…") }
+            override fun onReadyForSpeech(params: Bundle?) { publish("Listening...") }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
@@ -72,7 +73,7 @@ class SubtitleService : Service() {
     private fun showOverlay() {
         window = getSystemService(WINDOW_SERVICE) as WindowManager
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
-        val text = TextView(this).apply { setTextColor(prefs.getInt("color", 0xFFFFFFFF.toInt())); textSize = prefs.getFloat("font", 20f); setPadding(22, 14, 22, 14); setBackgroundColor((prefs.getFloat("opacity", .8f) * 255).toInt() shl 24 or 0x00111827); text = "Listening…" }
+        val text = TextView(this).apply { setTextColor(prefs.getInt("color", 0xFFFFFFFF.toInt())); textSize = prefs.getFloat("font", 20f); setPadding(22, 14, 22, 14); setBackgroundColor(((prefs.getFloat("opacity", .8f) * 255).toInt() shl 24) or 0x00111827); text = "Listening..." }
         val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         params = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, type, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = prefs.getInt("overlay_x", 24); y = prefs.getInt("overlay_y", 140) }
         var sx = 0f; var sy = 0f; var wx = 0; var wy = 0
