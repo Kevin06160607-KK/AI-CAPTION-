@@ -4,10 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.*
 import android.net.Uri
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.speech.SpeechRecognizer
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,22 +32,40 @@ class MainActivity : ComponentActivity() {
     private var running by mutableStateOf(false)
     private var latest by mutableStateOf("Your live subtitles will appear here")
     private var waitingForOverlay by mutableStateOf(false)
-    private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) startServiceFlow() }
-    private val receiver = object : BroadcastReceiver() { override fun onReceive(context: Context?, intent: Intent?) { if (intent?.action == "com.aitamil.livesubtitles.STOPPED") running = false else latest = intent?.getStringExtra("text") ?: latest } }
+    private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) startServiceFlow() else latest = "Audio capture permission is required by Android." }
+    private val requestProjection = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) launchService(result.resultCode, data)
+        else latest = "Device audio capture was not approved."
+    }
+    private val receiver = object : BroadcastReceiver() { override fun onReceive(context: Context?, intent: Intent?) {
+        when (intent?.action) {
+            SubtitleService.ACTION_STOPPED -> running = false
+            SubtitleService.ACTION_STATUS -> { latest = intent.getStringExtra(SubtitleService.EXTRA_TEXT) ?: latest; if (latest.startsWith("Could not") || latest.startsWith("Device audio capture ended") || latest.startsWith("Playback capture stopped")) running = false }
+            else -> latest = intent?.getStringExtra(SubtitleService.EXTRA_TEXT) ?: latest
+        }
+    } }
     @Suppress("DEPRECATION")
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); val filter = IntentFilter("com.aitamil.livesubtitles.UPDATE").apply { addAction("com.aitamil.livesubtitles.STOPPED") }; if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(receiver, filter); setContent { App() } }
-    override fun onResume() { super.onResume(); if (waitingForOverlay && Settings.canDrawOverlays(this)) { waitingForOverlay = false; launchService() } }
+    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); val filter = IntentFilter(SubtitleService.ACTION_UPDATE).apply { addAction(SubtitleService.ACTION_STATUS); addAction(SubtitleService.ACTION_STOPPED) }; if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(receiver, filter); setContent { App() } }
+    override fun onResume() { super.onResume(); if (waitingForOverlay && Settings.canDrawOverlays(this)) { waitingForOverlay = false; startServiceFlow() } }
     override fun onDestroy() { runCatching { unregisterReceiver(receiver) }; super.onDestroy() }
     private fun startServiceFlow() {
+        if (Build.VERSION.SDK_INT < 29) { latest = "Direct app audio captions need Android 10 or newer."; return }
         if (!Settings.canDrawOverlays(this)) { waitingForOverlay = true; startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))); return }
-        launchService()
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        requestProjection.launch(manager.createScreenCaptureIntent())
     }
-    private fun launchService() {
-        val i = Intent(this, SubtitleService::class.java)
+    private fun launchService(resultCode: Int, data: Intent) {
+        val i = Intent(this, SubtitleService::class.java).setAction(SubtitleService.ACTION_START)
+            .putExtra(SubtitleService.EXTRA_RESULT_CODE, resultCode).putExtra(SubtitleService.EXTRA_PROJECTION_DATA, data)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
         running = true
+        latest = "Starting private device-audio capture..."
     }
-    private fun start() { requestMic.launch(Manifest.permission.RECORD_AUDIO) }
+    private fun start() {
+        if (Build.VERSION.SDK_INT < 29) { latest = "Direct app-audio captions require Android 10 or newer."; return }
+        requestMic.launch(Manifest.permission.RECORD_AUDIO)
+    }
     private fun stop() { stopService(Intent(this, SubtitleService::class.java)); running = false }
     @Composable private fun App() {
         var page by remember { mutableStateOf("Home") }
@@ -65,10 +83,10 @@ class MainActivity : ComponentActivity() {
     }
     @Composable private fun Home() {
         Text("Live subtitles", fontSize = 27.sp, fontWeight = FontWeight.Bold)
-        Text("Recognize speech and translate it on your device.", color = Color.LightGray, modifier = Modifier.padding(top = 5.dp))
+        Text("Caption app audio directly without turning on the microphone.", color = Color.LightGray, modifier = Modifier.padding(top = 5.dp))
         Spacer(Modifier.height(18.dp))
         CardBox {
-            Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(10.dp).background(if (running) Color(0xFF48D597) else Color.Gray, RoundedCornerShape(20.dp))); Spacer(Modifier.width(9.dp)); Text(if (running) "Microphone listening" else "Ready to start", fontWeight = FontWeight.SemiBold) }
+            Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(10.dp).background(if (running) Color(0xFF48D597) else Color.Gray, RoundedCornerShape(20.dp))); Spacer(Modifier.width(9.dp)); Text(if (running) "Device audio capture" else "Ready to start", fontWeight = FontWeight.SemiBold) }
             Text(latest, modifier = Modifier.padding(top = 14.dp), color = Color.White, fontSize = 18.sp)
         }
         Spacer(Modifier.height(14.dp))
@@ -76,9 +94,9 @@ class MainActivity : ComponentActivity() {
         var mode by remember { mutableStateOf(getSharedPreferences("settings", MODE_PRIVATE).getString("mode", "TAMIL") ?: "TAMIL") }
         Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) { SubtitleMode.entries.forEach { m -> FilterChip(selected = mode == m.name, onClick = { mode = m.name; getSharedPreferences("settings", MODE_PRIVATE).edit().putString("mode", mode).apply() }, label = { Text(m.title) }) } }
         Spacer(Modifier.height(18.dp))
-        Button(onClick = { if (running) stop() else start() }, modifier = Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(18.dp)) { Icon(if (running) Icons.Default.Stop else Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text(if (running) "Stop subtitles" else "Start live subtitles", fontSize = 16.sp) }
+        Button(onClick = { if (running) stop() else start() }, modifier = Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(18.dp)) { Icon(if (running) Icons.Default.Stop else Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text(if (running) "Stop subtitles" else "Start device audio captions", fontSize = 16.sp) }
         Spacer(Modifier.height(14.dp))
-        CardBox { Text("Works across apps", fontWeight = FontWeight.SemiBold); Text("Keep the foreground notification active while you watch. Recognition uses your microphone. Some Android apps block playback capture; Android speech recognition does not accept captured app audio directly.", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
+        CardBox { Text("Playback stays undisturbed", fontWeight = FontWeight.SemiBold); Text("Android will ask you to allow app-audio capture. The app reads the permitted playback stream, not microphone input, so it does not lower or interrupt video sound. Keep the foreground notification active. Protected apps may block capture. The first start downloads the local speech model once (about 32 MB).", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
     }
     @Composable private fun CardBox(content: @Composable ColumnScope.() -> Unit) { Column(Modifier.fillMaxWidth().background(Card, RoundedCornerShape(20.dp)).padding(18.dp), content = content) }
     @Composable private fun History() {
@@ -93,11 +111,11 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         var size by remember { mutableFloatStateOf(prefs.getFloat("font", 20f)) }
         var opacity by remember { mutableFloatStateOf(prefs.getFloat("opacity", .8f)) }
-        var source by remember { mutableStateOf(prefs.getString("source", "en-US") ?: "en-US") }
+        var source by remember { mutableStateOf(prefs.getString("source", "auto") ?: "auto") }
         CardBox {
             Text("Recognition language", fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(top = 6.dp)) {
-                listOf("en-US" to "English", "ta-IN" to "\u0BA4\u0BAE\u0BBF\u0BB4\u0BCD", "hi-IN" to "Hindi").forEach { (tag, title) ->
+                listOf("auto" to "Auto", "en-US" to "English", "ta-IN" to "\u0BA4\u0BAE\u0BBF\u0BB4\u0BCD", "hi-IN" to "Hindi").forEach { (tag, title) ->
                     FilterChip(selected = source == tag, onClick = { source = tag; prefs.edit().putString("source", tag).apply() }, label = { Text(title) })
                 }
             }

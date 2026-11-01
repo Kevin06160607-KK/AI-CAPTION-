@@ -1,46 +1,36 @@
 # AI Tamil Live Subtitles
 
-A Kotlin and Jetpack Compose Android app for live speech recognition, Tamil translation, Tamil-to-Thanglish transliteration, an always-on-top subtitle panel, and on-device subtitle history.
+Android captions for app playback using Android AudioPlaybackCapture and a local Whisper speech model. App playback is captured directly and is not played through the microphone, so the app does not duck or interrupt the video's audio. The foreground service shows a persistent Stop action.
 
-## Capabilities and Android limits
+## Features
 
-- Speech recognition runs in a microphone foreground service with an ongoing notification and a Stop action.
-- Supports Tamil, Thanglish, and English output. ML Kit Translation downloads language models on demand; Tamil/English/Hindi are inferred from the recognized script when possible.
-- Tamil to Thanglish uses Android ICU's `Tamil-Latin` transliterator, which follows transliteration rules instead of replacing characters individually.
-- The movable overlay requires the Android “Display over other apps” permission. Font size, foreground color, and panel opacity are configurable.
-- History is stored locally in app preferences (up to 300 entries) and can be cleared in the app.
-- No API key or audio upload endpoint is used by this app.
+- Playback audio capture after the Android MediaProjection consent prompt. Requires Android 10 (API 29) or newer, `RECORD_AUDIO` permission (required by Android for playback capture), and an app that permits capture. The recorder is configured only with `AudioPlaybackCaptureConfiguration`; it never opens a microphone input.
+- On-device multilingual Whisper transcription. The approximately 32 MB tiny quantized model downloads from the official `ggerganov/whisper.cpp` model repository the first time; transcription then runs locally.
+- Tamil, Thanglish and English subtitles. Tamil-to-Thanglish uses Android ICU `Tamil-Latin` transliteration. Translation between Tamil, English and Hindi uses ML Kit on-device models downloaded as needed.
+- Draggable floating overlay, configurable size, text color and opacity, and on-device history (last 300 entries).
+- No API keys, audio uploads or cloud speech-recognition service.
 
-Android playback capture is not a general-purpose way to feed audio into speech recognition. It requires user-approved MediaProjection, Android 10+, and cooperation from the source app; apps can opt out. Android's public `SpeechRecognizer` listens through the microphone and has no API to accept an `AudioRecord` stream captured from another app. This build therefore uses the microphone for real recognition. When allowed, device audio may be audible to the microphone while speakers are in use, but headphone playback will not be captured. Read Android's audio capture and foreground service documentation before extending this into a playback-capture pipeline.
+Some apps deliberately block playback capture; Android cannot override their capture policy. Audio captions update in short rolling windows, so captions can appear a few seconds after the spoken audio. Translation models need an internet connection on their first use. The app supports arm64 phones and x86_64 emulators.
 
-Recognition language is currently set to English (United States), which is a practical default for speech services. Change `source` in `SubtitleService.listenAgain()` to `ta-IN` or `hi-IN` for speech services that need a fixed language. Language auto-detection quality depends on the installed Android recognizer. The translated text is best-effort; model availability and language support are supplied by ML Kit.
+## Run on a device
 
-## Requirements
+1. Open the project in Android Studio with JDK 17, Android SDK Platform 35, NDK 27.2.12479018 and CMake 3.22.1.
+2. Install and open the app. Connect to Wi-Fi for the first run so it can download the local Whisper model; translation models download when first needed.
+3. Tap **Start device audio captions**. Allow the Android audio permission, overlay permission, and the system playback-capture prompt. The Android audio permission is a platform prerequisite; this app captures the playback stream and does not use microphone input.
+4. Start or resume the video in the other app. Choose Tamil, Thanglish or English. Use the persistent notification to stop capture.
 
-- Android Studio with JDK 17
-- Android SDK Platform 35 and Build Tools installed
-- Android 8.0 (API 26) or newer device; Android 10+ is recommended
-
-## Open and run
-
-1. Open this directory in Android Studio and allow Gradle sync.
-2. Run the `app` configuration on a device.
-3. Grant microphone permission and “Display over other apps” access when prompted.
-4. Choose Tamil, Thanglish, or English output and tap **Start live subtitles**.
-5. The foreground notification remains available to stop recognition while another app is visible.
-
-Connect to Wi-Fi once to download each ML Kit translation model used. Models run on device after download.
+The Android system can stop MediaProjection at any time from Quick Settings. Start a new session to resume. Protected apps may provide silence by design.
 
 ## Build a debug APK
 
-From Android Studio, choose **Build > Build Bundle(s) / APK(s) > Build APK(s)**. Or, with Gradle 8.9 and JDK 17 installed:
+With JDK 17 and Gradle 8.9:
 
 ```powershell
 gradle --no-daemon :app:assembleDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions runs this same build on pushes, pull requests, and manual dispatch, then uploads the APK as a workflow artifact.
+The APK is `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds it on push, pull request or manual dispatch and uploads the APK artifact.
 
-## Privacy and permissions
+## Privacy
 
-The app requests `RECORD_AUDIO`, overlay access, and foreground-service permissions. Audio is processed by Android's recognizer; device vendors may route recognition through their speech service. Translation runs through ML Kit. No credentials are embedded. Revoke microphone or overlay access in Android Settings at any time.
+Audio stays on device for transcription. The app asks Android to grant a temporary MediaProjection token, reads only playback usages allowed by Android, and stops when the user or system ends the session. The only network downloads are the Whisper model and on-device translation models. No recognized audio or text is uploaded.
